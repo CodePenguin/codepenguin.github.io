@@ -21,6 +21,10 @@ excerpt_separator: <!--more-->
 paginate: 4
 paginate_path: "/page/:num/"
 
+disqus:
+    shortname: codepenguin
+google_analytics: UA-5209103-1
+
 defaults:
   -
     scope:
@@ -28,3 +32,4 @@ defaults:
       type: "posts"
     values:
       author: David Lambert
+      comments: true
