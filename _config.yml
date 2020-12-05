@@ -1,0 +1,29 @@
+title: Code Penguin
+email: david@codepenguin.com
+description: >- # this means to ignore newlines until "baseurl:"
+  Constantly tinkering with things…
+baseurl: "" # the subpath of your site, e.g. /blog
+url: "" # the base hostname & protocol for your site, e.g. http://example.com
+twitter_username: CodePenguin
+github_username: CodePenguin
+linkedin_username: CodePenguin
+
+# Build settings
+markdown: kramdown
+theme: minima
+plugins:
+  - jekyll-feed
+
+# Site Settings
+show_excerpts: true
+excerpt_separator: <!--more-->
+paginate: 4
+paginate_path: "/page/:num/"
+
+defaults:
+  -
+    scope:
+      path: ""
+      type: "posts"
+    values:
+      author: David Lambert
