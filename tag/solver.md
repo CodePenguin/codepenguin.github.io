@@ -1,5 +1,6 @@
 ---
 layout: tagpage
-title: "Tag: cryptography"
-tag: cryptography
+title: "Tag: solver"
+tag: solver
+permalink: "/tags/solver/"
 ---
