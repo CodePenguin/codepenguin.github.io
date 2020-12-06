@@ -2,11 +2,6 @@
 layout: post
 title: Slipix Version 1.0 for iOS
 date: 2011-09-01 19:21:43.000000000 -04:00
-categories:
-- iOS
-tags:
-- apps
-- iphone
 permalink: "/2011/09/01/slipix-version-1-0-for-ios/"
 ---
 **Slipix has been discontinued and will not be updated anymore.**

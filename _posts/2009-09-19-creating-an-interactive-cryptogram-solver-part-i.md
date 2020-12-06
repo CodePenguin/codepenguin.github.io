@@ -4,9 +4,9 @@ title: Creating an interactive cryptogram solver (Part I)
 date: 2009-09-19 16:04:11.000000000 -04:00
 tags:
 - ACA
-- aristocra
-- cryptography
+- aristocrat
 - cryptograms
+- cryptography
 - programming
 - python
 - solver

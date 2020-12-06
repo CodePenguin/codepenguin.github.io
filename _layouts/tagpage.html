@@ -1,0 +1,27 @@
+---
+layout: default
+---
+<div class="post">
+<h1 class="page-heading">Tag: {{ page.tag }}</h1>
+<ul class="post-list">
+{% for post in site.tags[page.tag] %}
+  <li>
+    {%- assign date_format = site.minima.date_format | default: "%b %-d, %Y" -%}
+    <span class="post-meta">{{ post.date | date: date_format }}</span>
+    <h3>
+      <a class="post-link" href="{{ post.url | relative_url }}">
+        {{ post.title | escape }}
+      </a>
+    </h3>
+    {%- if site.show_excerpts -%}
+      {{ post.excerpt }}
+      {%- if post.content.size > post.excerpt.size %}
+        <a href="{{ post.url | relative_url }}#more">
+          <strong>[Read More]</strong>
+        </a>
+      {%- endif %}
+    {%- endif -%}
+  </li>
+{% endfor %}
+</ul>
+</div>

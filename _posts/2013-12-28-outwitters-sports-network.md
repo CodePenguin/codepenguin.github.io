@@ -8,7 +8,6 @@ published: true
 password: ''
 status: publish
 tags:
-- outwitters
 - programming
 permalink: "/2013/12/28/outwitters-sports-network/"
 ---

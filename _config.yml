@@ -16,6 +16,10 @@ plugins:
   - jekyll-sitemap
 
 # Site Settings
+header_pages:
+  - projects.md
+  - tags.md
+  - about.md
 show_excerpts: true
 excerpt_separator: <!--more-->
 paginate: 4
