@@ -7,6 +7,9 @@ url: "https://codepenguin.com" # the base hostname & protocol for your site, e.g
 twitter_username: CodePenguin
 github_username: CodePenguin
 linkedin_username: CodePenguin
+mastodon:
+- username: CodePenguin
+  instance: hachyderm.io
 
 # Build settings
 markdown: kramdown
@@ -24,6 +27,7 @@ show_excerpts: true
 excerpt_separator: <!--more-->
 paginate: 4
 paginate_path: "/page/:num/"
+include: [".well-known"]
 
 disqus:
     shortname: codepenguin

@@ -1,0 +1,24 @@
+{
+    "subject": "acct:CodePenguin@hachyderm.io",
+    "aliases": [
+        "https://hachyderm.io/@CodePenguin",
+        "https://hachyderm.io/users/CodePenguin",
+        "codepenguin@hachyderm.io"
+    ],
+    "links": [
+        {
+            "rel": "http://webfinger.net/rel/profile-page",
+            "type": "text/html",
+            "href": "https://hachyderm.io/@CodePenguin"
+        },
+        {
+            "rel": "self",
+            "type": "application/activity+json",
+            "href": "https://hachyderm.io/users/CodePenguin"
+        },
+        {
+            "rel": "http://ostatus.org/schema/1.0/subscribe",
+            "template": "https://hachyderm.io/authorize_interaction?uri={uri}"
+        }
+    ]
+}
