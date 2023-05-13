@@ -4,8 +4,9 @@ title: 'ShortDash: Cross-platform Shortcut Dashboard'
 date: 2020-12-03 22:04:55.000000000 -05:00
 tags:
 - blazor
-- shortdash
+- dotnet
 - programming
+- shortdash
 permalink: "/2020/12/03/shortdash-cross-platform-shortcut-dashboard/"
 ---
 A few months ago, I was sitting in a video conference and noticed that the room was getting hot. I have a fan but it was just out of reach and it would have been rude to walk out of the frame in the middle of the meeting. At that point I wished I had one of those digital power plugs that you can control from your phone. I did eventually get one of those plugs but you had to use their dedicated app to control it. I thought it would be much more convenient to have a central dashboard where I could control it. And then it would be nice to be able to execute other things. This led to some tinkering with [https://ifttt.com/](https://ifttt.com/) and its web request functionality. Soon after, the idea of [ShortDash](https://github.com/CodePenguin/shortdash) began to form.
