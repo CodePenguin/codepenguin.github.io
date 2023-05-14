@@ -93,7 +93,7 @@ dotnet add package Microsoft.IdentityModel.Protocols.OpenIdConnect
 ```
 
 We will be using the models defined in `System.IdentityModel.Tokens.Jwt` since Microsoft has already provided the proper DTO classes that are needed to deserialize the requests and validate a JWT.
-We could create each one on our own but the models are just simple classes with the required properties so we would just be duplicated the effort.
+We could create each one on our own but the models are just simple classes with the required properties so we would just be duplicating the effort.
 
 The same thing goes for `Microsoft.IdentityModel.Protocols.OpenIdConnect` which contains the DTO classes for working with the OpenID Connect protocol.
 
@@ -440,8 +440,8 @@ private async Task<string> RequestAuthorizationCodeAsync(int redirectUriPort, st
 
 One important thing to point out here is that `code_challenge` and `code_challenge_method` values are included in the authorization request.
 This implements the PKCE workflow covered in the [RFC 7636 Proof Key for Code Exchange by OAuth Public Clients Section 4.1](https://datatracker.ietf.org/doc/html/rfc7636#section-4.1) and is used to prevent malicious interception and tampering of the data.
-This value is generated from the `Code Verifier` mentioned earlier that was created by generating 32 bytes of secure random data and then Base64 URL Encoding the bytes.
-The `Code Challenge` is then prepared using the `S256` `Code Challenge Method` by taking the `Code Verifier` and applying the SHA-256 hashing algorithm and then Base64 URL Encoding the result again.
+This value is generated from the `Code Verifier` mentioned earlier that was created by generating 32 bytes of secure random data and then Base64 URL encoding the bytes.
+The `Code Challenge` is then prepared using the `S256` `Code Challenge Method` by taking the `Code Verifier` and applying the SHA-256 hashing algorithm and then Base64 URL encoding the result again.
 
 An example generated URL is provided below:
 
@@ -484,7 +484,7 @@ private static string BuildUrl(string baseUrl, Dictionary<string, string> queryP
 
 ### RequestTokenAsync Function
 
-The authorization code on its own is not very useful on its own.
+The authorization code is not very useful on its own.
 It is only used for immediately requesting ID and Access tokens using the Token Endpoint and an HTTP Post with specific Form URL Encoded parameters.  
 The `authorization_code`, `redirect_uri`, and `code_verifier` are included in the parameters.  
 The `code_verifier` is the `Code Verifier` value that was originally generated.
