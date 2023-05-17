@@ -77,7 +77,7 @@ exports.onExecutePostLogin = async (event, api) => {
 
 Note: We are using the `Client ID` from the authorization request as the namespace because the "roles" claim is [restricted](https://auth0.com/docs/secure/tokens/json-web-tokens/create-custom-claims#general-restrictions) by Auth0 and cannot be set by the login actions.  If you try, it will be silently ignored and the token will be untouched.
 If our `Client ID` was "XYZ123" then a custom claim "XYZ123_roles" will be added for each role.
-
+The `RoleClaimType` configuration option must match this value.
 
 ## Create the Dotnet Console Application
 
@@ -101,6 +101,7 @@ Edit `AuthenticationSettings.cs` with the following contents:
 
 ```csharp
 namespace OpenIdConnectConsoleTest;
+
 public class AuthenticationSettings
 {
     public string Audience { get; set; } = string.Empty;
@@ -108,6 +109,7 @@ public class AuthenticationSettings
     public string ClientId { get; set; } = string.Empty;
     public string RedirectUriPath { get; set; } = "callback";
     public int RedirectUriPort { get; set; } = 0;
+    public string RoleClaimType { get; set; } = "roles";
 }
 ```
 
@@ -118,6 +120,7 @@ Execute the following from a command line from the project folder with the place
 dotnet user-secrets set "Authentication:Authority" "https://{Auth0 Domain}/"
 dotnet user-secrets set "Authentication:ClientId" "{Auth0 Client ID}"
 dotnet user-secrets set "Authentication:RedirectUriPort" "49152"
+dotnet user-secrets set "Authentication:RoleClaimType" "{Auth0 Client ID}/roles"
 ```
 Edit `appsettings.Development.json` and change the `Logging:LogLevel:Default` value to `Debug`.
 There is lot of debug logging in the example code below so you can view responses.
@@ -260,11 +263,7 @@ Microsoft has already provided classes that maintain and cache this configuratio
 ```csharp
 private async Task<OpenIdConnectConfiguration> RetrieveOpenIdConnectConfigurationAsync(CancellationToken cancellationToken)
 {
-    var uriBuilder = new UriBuilder(_authSettings.Authority)
-    {
-        Path = "/.well-known/openid-configuration"
-    };
-    var uri = uriBuilder.ToString();
+    var uri = _authSettings.Authority.TrimEnd('/') + "/.well-known/openid-configuration";
     _logger.LogInformation("Retrieving configuration from {endpoint}...", uri);
     var configurationManager = new ConfigurationManager<OpenIdConnectConfiguration>(
         uri,
@@ -388,7 +387,7 @@ private async Task<string> RequestAuthorizationCodeAsync(int redirectUriPort, st
     }
 
     _logger.LogInformation("Waiting for response from browser...");
-    var context = await listener.GetContextAsync().WaitAsync(TimeSpan.FromMinutes(2), stoppingToken);
+    var context = await listener.GetContextAsync().WaitAsync(TimeSpan.FromMinutes(5), stoppingToken);
     var request = context.Request;
     _logger.LogDebug("Response URL: {url}", request.Url);
 
@@ -585,7 +584,7 @@ private ClaimsPrincipal ValidateToken(string token, string audience, OpenIdConne
         NameClaimType = "name",
         RequireExpirationTime = true,
         RequireSignedTokens = true,
-        RoleClaimType = $"{_authSettings.ClientId}/roles",
+        RoleClaimType = _authSettings.RoleClaimType,
         ValidateAudience = true,
         ValidateIssuerSigningKey = true,
         ValidateIssuer = true,
@@ -638,6 +637,34 @@ info: OpenIdConnectConsoleTest.Worker[0]
 info: Microsoft.Hosting.Lifetime[0]
       Application is shutting down...
 ```
+
+## Microsoft Identity Platform
+
+The code and workflows used here should work with any OpenID Connect compliant identity Provider.
+The [Microsoft Identity Platform](https://azure.microsoft.com/) can be used as well.
+
+Perform the following steps register a new application and setup the appropriate roles:
+
+* Sign up for an [Azure](https://azure.microsoft.com/) account.
+* Register a new application via [Azure Active Directory -> App Registrations](<https://learn.microsoft.com/en-us/azure/active-directory/develop/quickstart-register-app).
+* Set the `Redirect URI` to: `Public client/native (mobile & desktop)` and `http://127.0.0.1/callback`
+* Copy down the `Directory (tenant) ID` and `{Application (client) ID` listed on the Overview screen.
+* Create two [App roles](https://learn.microsoft.com/en-us/azure/active-directory/develop/howto-add-app-roles-in-azure-ad-apps): Admin, Guest
+* Create a test user.
+* Use `Enterprise Applications -> Users and groups` to add the Admin role to the test user.
+
+Execute the following to configure the authentication settings for the Microsoft Identity Platform:
+
+```shell
+dotnet user-secrets set "Authentication:Authority" "https://login.microsoftonline.com/{Directory (tenant) ID}/v2.0"
+dotnet user-secrets set "Authentication:ClientId" "{Application (client) ID}"
+dotnet user-secrets set "Authentication:RedirectUriPort" 0
+dotnet user-secrets remove "Authentication:RoleClaimType"
+```
+
+The `RoleClaimType` configuration is removed because the Microsoft Identity Platform defaults to using the reserved `roles` claim which is the default value.
+
+![Azure Authorization Prompt]({{ site.baseurl }}/assets/2023/05/openid-connect-dotnet-desktop-application/azure_identity_authorization_prompt.png)
 
 ## Conclusion
 

@@ -73,11 +73,7 @@ public class Worker : BackgroundService
 
     private async Task<OpenIdConnectConfiguration> RetrieveOpenIdConnectConfigurationAsync(CancellationToken cancellationToken)
     {
-        var uriBuilder = new UriBuilder(_authSettings.Authority)
-        {
-            Path = "/.well-known/openid-configuration"
-        };
-        var uri = uriBuilder.ToString();
+        var uri = _authSettings.Authority.TrimEnd('/') + "/.well-known/openid-configuration";
         _logger.LogInformation("Retrieving configuration from {endpoint}...", uri);
         var configurationManager = new ConfigurationManager<OpenIdConnectConfiguration>(
             uri,
@@ -162,7 +158,7 @@ public class Worker : BackgroundService
         }
 
         _logger.LogInformation("Waiting for response from browser...");
-        var context = await listener.GetContextAsync().WaitAsync(TimeSpan.FromMinutes(2), stoppingToken);
+        var context = await listener.GetContextAsync().WaitAsync(TimeSpan.FromMinutes(5), stoppingToken);
         var request = context.Request;
         _logger.LogDebug("Response URL: {url}", request.Url);
 
@@ -270,7 +266,7 @@ public class Worker : BackgroundService
             NameClaimType = "name",
             RequireExpirationTime = true,
             RequireSignedTokens = true,
-            RoleClaimType = $"{_authSettings.ClientId}/roles",
+            RoleClaimType = _authSettings.RoleClaimType,
             ValidateAudience = true,
             ValidateIssuerSigningKey = true,
             ValidateIssuer = true,
