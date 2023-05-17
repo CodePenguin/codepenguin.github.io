@@ -77,7 +77,7 @@ exports.onExecutePostLogin = async (event, api) => {
 
 Note: We are using the `Client ID` from the authorization request as the namespace because the "roles" claim is [restricted](https://auth0.com/docs/secure/tokens/json-web-tokens/create-custom-claims#general-restrictions) by Auth0 and cannot be set by the login actions.  If you try, it will be silently ignored and the token will be untouched.
 If our `Client ID` was "XYZ123" then a custom claim "XYZ123_roles" will be added for each role.
-The `RoleClaimType` configuration option must match this value.
+The `Authorization:RoleClaimType` configuration option must match this value.
 
 ## Create the Dotnet Console Application
 
@@ -646,7 +646,7 @@ The [Microsoft Identity Platform](https://azure.microsoft.com/) can be used as w
 Perform the following steps register a new application and setup the appropriate roles:
 
 * Sign up for an [Azure](https://azure.microsoft.com/) account.
-* Register a new application via [Azure Active Directory -> App Registrations](<https://learn.microsoft.com/en-us/azure/active-directory/develop/quickstart-register-app).
+* Register a new application via [Azure Active Directory -> App Registrations](https://learn.microsoft.com/en-us/azure/active-directory/develop/quickstart-register-app).
 * Set the `Redirect URI` to: `Public client/native (mobile & desktop)` and `http://127.0.0.1/callback`
 * Copy down the `Directory (tenant) ID` and `{Application (client) ID` listed on the Overview screen.
 * Create two [App roles](https://learn.microsoft.com/en-us/azure/active-directory/develop/howto-add-app-roles-in-azure-ad-apps): Admin, Guest
