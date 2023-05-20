@@ -699,7 +699,7 @@ The technique was borrowed from the [Google OAuth for Apps: Sample Console Appli
 
 [RFC 8252 Section 7.3](https://datatracker.ietf.org/doc/html/rfc8252#section-7.3) states:
 
-    "The authorization server MUST allow any port to be specified at the time of the request for loopback IP redirect URIs, to accommodate clients that obtain an available ephemeral port from the operating system at the time of the request."
+> "The authorization server MUST allow any port to be specified at the time of the request for loopback IP redirect URIs, to accommodate clients that obtain an available ephemeral port from the operating system at the time of the request."
 
 Unfortunately, [Auth0 does not currently support randomly assigned ports](https://community.auth0.com/t/random-local-ports-on-redirect-uri/28623/9) so you must specify a port in the Authentication settings and it must match the port used when setting up the Auth0 Callback URLs mentioned previously.
 For other authentication servers that support randomly defined ports, leave the `RedirectUriPort` setting as 0.
@@ -817,7 +817,7 @@ An interesting thing to note here is that we are including the `Client Secret` a
 Generally, for desktop applications using the Authorization Code workflow, you wouldn't need to include the `Client Secret` because it cannot be properly secured in the desktop application.
 In this instance, Google is not treating it as secret as pointed out in their [documentation for installed applications](https://developers.google.com/identity/protocols/oauth2#installed):
 
-    "The process results in a client ID and, in some cases, a client secret, which you embed in the source code of your application. (In this context, the client secret is obviously not treated as a secret.)"
+> "The process results in a client ID and, in some cases, a client secret, which you embed in the source code of your application. (In this context, the client secret is obviously not treated as a secret.)"
 
 ![Google Authorization Prompt]({{ site.baseurl }}/assets/2023/05/openid-connect-dotnet-desktop-application/google_authorization_prompt.png)
 
