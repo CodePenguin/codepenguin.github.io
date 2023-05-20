@@ -5,3 +5,9 @@ _site
 
 # MacOS
 *.DS_Store
+
+# VS build output files
+assets/**/[Bb]in/
+assets/**/[Oo]bj/
+assets/**/.vs/
+assets/**/*.user

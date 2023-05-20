@@ -3,13 +3,12 @@ using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Microsoft.IdentityModel.Tokens;
 using System.Diagnostics;
 using System.IdentityModel.Tokens.Jwt;
-using System.Net;
-using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Encodings.Web;
+using System.Web;
 
 namespace OpenIdConnectConsoleTest;
 
@@ -61,12 +60,10 @@ public class Worker : BackgroundService
     private async Task<ClaimsPrincipal> AuthenticateExternalUserAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation("Authenticating with {authority}...", _authSettings.Authority);
-
         OpenIdConnectConfiguration openIdConfiguration = await RetrieveOpenIdConnectConfigurationAsync(stoppingToken);
         string codeVerifier = Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(32));
-        int redirectUriPort = GetRedirectUriPort();
-        string authorizationCode = await RequestAuthorizationCodeAsync(redirectUriPort, codeVerifier, openIdConfiguration, stoppingToken);
-        OpenIdConnectMessage tokenResponse = await RequestTokenAsync(redirectUriPort, authorizationCode, codeVerifier, openIdConfiguration, stoppingToken);
+        AuthorizationCallbackResponse response = await RequestAuthorizationCodeAsync(codeVerifier, openIdConfiguration, stoppingToken);
+        OpenIdConnectMessage tokenResponse = await RequestTokenAsync(response.RedirectUrl, response.AuthorizationCode, codeVerifier, openIdConfiguration, stoppingToken);
         ClaimsPrincipal claimsPrincipal = ValidateToken(tokenResponse.IdToken, _authSettings.ClientId, openIdConfiguration);
         return claimsPrincipal;
     }
@@ -82,40 +79,19 @@ public class Worker : BackgroundService
         return await configurationManager.GetConfigurationAsync(cancellationToken);
     }
 
-    private int GetRedirectUriPort()
-    {
-        // Use a specific port if configured since Auth0 does not support randomly assigned ports
-        if (_authSettings.RedirectUriPort != 0)
-        {
-            return _authSettings.RedirectUriPort;
-        }
-        // Retrieve an assigned port from the operating system
-        var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-        listener.Stop();
-        return port;
-    }
-
-    private string GetRedirectUri(int port)
-    {
-        return $"http://{IPAddress.Loopback}:{port}/{_authSettings.RedirectUriPath}";
-    }
-
-    private async Task<string> RequestAuthorizationCodeAsync(int redirectUriPort, string codeVerifier, OpenIdConnectConfiguration openIdConfiguration, CancellationToken stoppingToken)
+    private async Task<AuthorizationCallbackResponse> RequestAuthorizationCodeAsync(string codeVerifier, OpenIdConnectConfiguration openIdConfiguration, CancellationToken stoppingToken)
     {
         _logger.LogInformation("Requesting authorization code from {endpoint}...", openIdConfiguration.AuthorizationEndpoint);
 
-        var authorizationCode = string.Empty;
+        // Generate values used to protect and verify the request
         var requestState = Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(16));
         var codeChallenge = Base64UrlEncoder.Encode(SHA256.HashData(Encoding.ASCII.GetBytes(codeVerifier)));
 
-        _logger.LogInformation("Starting HTTP Listener...");
-        using var listener = new HttpListener();
-        listener.Prefixes.Add($"http://{IPAddress.Loopback}:{redirectUriPort}/");
-        listener.Start();
+        // Start the listener and generate the Redirect URI
+        ICallbackListener listener = CallbackListenerFactory.GetCallbackListener();
+        listener.Listen(_authSettings, out var redirectUri);
 
-        var redirectUri = GetRedirectUri(redirectUriPort);
+        // Build the authorization request URL
         var parameters = new Dictionary<string, string>
         {
             { "response_type", "code" },
@@ -132,10 +108,73 @@ public class Worker : BackgroundService
             parameters.Add("audience", _authSettings.Audience);
         }
 
-        var url = BuildUrl(openIdConfiguration.AuthorizationEndpoint, parameters);
+        string url = BuildUrl(openIdConfiguration.AuthorizationEndpoint, parameters);
 
-        _logger.LogInformation("Opening default browser...", url);
+        // Open System Browser and wait for the redirect response URI
+        _logger.LogInformation("Opening default browser...");
         _logger.LogDebug("Request URL: {request}", url);
+
+        OpenSystemBrowser(url);
+
+        _logger.LogInformation("Waiting for response from browser...");
+        var responseUri = await listener.WaitForResponseAsync(stoppingToken);
+
+        _logger.LogDebug("Response URL: {url}", responseUri);
+
+        string? error = null;
+        string? errorDescription = null;
+
+        // Verify the redirect response URI exactly matches the Redirect URI sent in the authorization request
+        if (!responseUri!.ToString().StartsWith(redirectUri))
+        {
+            error = "Invalid Response";
+            errorDescription = $"The response does not match the redirect URI: {redirectUri}";
+        }
+
+        // Check response for errors
+        var queryString = HttpUtility.ParseQueryString(responseUri?.Query ?? string.Empty);
+        error ??= queryString["error"];
+        if (error != null)
+        {
+            errorDescription ??= queryString["error_description"] ?? "Unknown Error";
+            _logger.LogError("Authorization request failed: {error} - {description}", error, errorDescription);
+            throw new Exception($"Authorization request failed: {error} - {errorDescription}");
+        }
+
+        var callbackResponse = new AuthorizationCallbackResponse
+        {
+            AuthorizationCode = queryString["code"] ?? string.Empty,
+            RedirectUrl = redirectUri,
+            State = queryString["state"] ?? string.Empty
+        };
+
+        // Verify the state matches what was sent in the authorization request
+        if ((requestState != callbackResponse.State) || string.IsNullOrEmpty(callbackResponse.AuthorizationCode))
+        {
+            throw new Exception("Invalid authorization state");
+        }
+        return callbackResponse;
+    }
+
+    private static string BuildUrl(string baseUrl, Dictionary<string, string> queryParameters)
+    {
+        var queryBuilder = new StringBuilder();
+        foreach (var pair in queryParameters)
+        {
+            queryBuilder.Append('&');
+            queryBuilder.Append(UrlEncoder.Default.Encode(pair.Key));
+            queryBuilder.Append('=');
+            queryBuilder.Append(UrlEncoder.Default.Encode(pair.Value));
+        }
+        var uri = new UriBuilder(baseUrl)
+        {
+            Query = queryBuilder.ToString().Trim('&')
+        };
+        return uri.ToString();
+    }
+
+    private void OpenSystemBrowser(string url)
+    {
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
             Process.Start(new ProcessStartInfo
@@ -156,75 +195,9 @@ public class Worker : BackgroundService
         {
             throw new NotSupportedException("Cannot open default browser");
         }
-
-        _logger.LogInformation("Waiting for response from browser...");
-        var context = await listener.GetContextAsync().WaitAsync(TimeSpan.FromMinutes(5), stoppingToken);
-        var request = context.Request;
-        _logger.LogDebug("Response URL: {url}", request.Url);
-
-        string? error = null;
-        string? errorDescription = null;
-        if (!redirectUri.Equals($"http://{request.Url?.Host}:{request.Url?.Port}{request.Url?.AbsolutePath}"))
-        {
-            error = "Invalid Response";
-            errorDescription = "The response does not match the redirect URI";
-        }
-
-        string responseText;
-        error ??= request.QueryString["error"];
-        if (error != null)
-        {
-            errorDescription ??= request.QueryString["error_description"] ?? "Unknown Error";
-            _logger.LogError("Authorization request failed: \"{error}\": {description}", error, errorDescription);
-            responseText = "Authorization request failed";
-        }
-        else
-        {
-            authorizationCode = request.QueryString["code"] ?? string.Empty;
-            var responseState = request.QueryString["state"];
-
-            if ((requestState != responseState) || string.IsNullOrEmpty(authorizationCode))
-            {
-                responseText = "Authorization state was not valid";
-                _logger.LogError("{response}", responseText);
-            }
-            else
-            {
-                responseText = "Authorization code received";
-                _logger.LogInformation("{response}", responseText);
-            }
-        }
-
-        var response = context.Response;
-        using (var writer = new StreamWriter(response.OutputStream))
-        {
-            writer.WriteLine($"<HTML><BODY>{responseText}</BODY></HTML>");
-            writer.Flush();
-        }
-
-        return !string.IsNullOrEmpty(authorizationCode)
-            ? authorizationCode
-            : throw new Exception(responseText);
     }
 
-    private static string BuildUrl(string baseUrl, Dictionary<string, string> queryParameters)
-    {
-        var queryBuilder = new StringBuilder();
-        foreach (var pair in queryParameters)
-        {
-            queryBuilder.Append('&');
-            queryBuilder.Append(UrlEncoder.Default.Encode(pair.Key));
-            queryBuilder.Append('=');
-            queryBuilder.Append(UrlEncoder.Default.Encode(pair.Value));
-        }
-        var uri = new UriBuilder(baseUrl)
-        {
-            Query = queryBuilder.ToString().Trim('&')
-        };
-        return uri.ToString();
-    }
-
-    private async Task<OpenIdConnectMessage> RequestTokenAsync(int redirectUriPort, string authorizationCode, string codeVerifier, OpenIdConnectConfiguration openIdConfiguration, CancellationToken stoppingToken)
+    private async Task<OpenIdConnectMessage> RequestTokenAsync(string redirectUri, string authorizationCode, string codeVerifier, OpenIdConnectConfiguration openIdConfiguration, CancellationToken stoppingToken)
     {
         _logger.LogInformation("Requesting access token from {endpoint}...", openIdConfiguration.TokenEndpoint);
         var parameters = new Dictionary<string, string>
@@ -232,9 +205,14 @@ public class Worker : BackgroundService
             { "grant_type", "authorization_code" },
             { "client_id", _authSettings.ClientId },
             { "code", authorizationCode },
-            { "redirect_uri", GetRedirectUri(redirectUriPort) },
+            { "redirect_uri", redirectUri },
             { "code_verifier", codeVerifier }
         };
+
+        if (!string.IsNullOrEmpty(_authSettings.ClientSecret))
+        {
+            parameters.Add("client_secret", _authSettings.ClientSecret);
+        }
 
         var request = new HttpRequestMessage(HttpMethod.Post, openIdConfiguration.TokenEndpoint)
         {
@@ -243,13 +221,12 @@ public class Worker : BackgroundService
 
         _logger.LogDebug("Request: {request}, Form Parameters: {parameters}", request, parameters);
         var response = _httpClient.Send(request, stoppingToken);
+        var json = await response.Content.ReadAsStringAsync(stoppingToken);
+        _logger.LogDebug("Response: {json}", json);
         if (!response.IsSuccessStatusCode)
         {
             throw new Exception($"Token request failed: {response.ReasonPhrase}");
         }
-
-        var json = await response.Content.ReadAsStringAsync(stoppingToken);
-        _logger.LogDebug("Response: {json}", json);
         return new OpenIdConnectMessage(json);
     }
 

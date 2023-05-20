@@ -25,8 +25,8 @@ The basic authentication workflow for a native/desktop/console/ application is a
     - Code Challenge
     - Code Challenge Method
 1. Authorization Server's Authorization Endpoint receives the authorization request and then authenticates and authorizes the user.
-1. Authorization server issues an authorization code and redirects the browser to the specified Redirect URI with the response appended to it.
-1. Application receives the Redirect URI and retrieves the authentication code.
+1. Authorization server issues an authorization code and redirects the browser to the specified Redirect URI with the response appended to it as query string parameters.
+1. Application receives the Redirect URI and retrieves the authentication code and validates the state from the response.
 1. Application sends the authentication code to the Token Endpoint including the following details:
     - Grant Type = "authorization_code"
     - Client ID
@@ -49,8 +49,8 @@ You can quickly sign up for a free account that gives you plenty of capabilities
 * Sign up for an [Auth0](https://auth0.com) account.
 * Create a new Native Application (Mobile, desktop, CLI)
 * Copy down the `Domain` and `Client ID` listed on the Settings tab.
-* Set the `Callback URLs` to: `http://127.0.0.1:49152/callback, http://[::1]:49152/callback`
-* Set the `Allowed Web Origins` to: `http://127.0.0.1:49152, http://[::1]:49152`
+* Set the `Callback URLs` to: `http://127.0.0.1:49152/callback`
+* Set the `Allowed Web Origins` to: `http://127.0.0.1:49152`
 * Create two roles: Admin, Guest
 * Create a test user with the Admin role.
 
@@ -89,6 +89,10 @@ From a command line execute the following to create the console application proj
 dotnet new worker -n OpenIdConnectConsoleTest
 cd OpenIdConnectConsoleTest
 dotnet new class -n AuthenticationSettings
+dotnet new class -n AuthorizationCallbackResponse
+dotnet new interface -n ICallbackListener
+dotnet new class -n CallbackListenerFactory
+dotnet new class -n HttpCallbackListener
 dotnet add package Microsoft.IdentityModel.Protocols.OpenIdConnect
 ```
 
@@ -96,6 +100,8 @@ We will be using the models defined in `System.IdentityModel.Tokens.Jwt` since M
 We could create each one on our own but the models are just simple classes with the required properties so we would just be duplicating the effort.
 
 The same thing goes for `Microsoft.IdentityModel.Protocols.OpenIdConnect` which contains the DTO classes for working with the OpenID Connect protocol.
+
+### AuthenticationSettings Class
 
 Edit `AuthenticationSettings.cs` with the following contents:
 
@@ -107,7 +113,7 @@ public class AuthenticationSettings
     public string Audience { get; set; } = string.Empty;
     public string Authority { get; set; } = string.Empty;
     public string ClientId { get; set; } = string.Empty;
-    public string RedirectUriPath { get; set; } = "callback";
+    public string ClientSecret { get; set; } = string.Empty;
     public int RedirectUriPort { get; set; } = 0;
     public string RoleClaimType { get; set; } = "roles";
 }
@@ -117,6 +123,7 @@ We will use the `dotnet user-secrets` command to setup the configuration for ite
 Execute the following from a command line from the project folder with the placeholders replace with your Auth0 values from earlier:
 
 ```shell
+dotnet user-secrets clear
 dotnet user-secrets set "Authentication:Authority" "https://{Auth0 Domain}/"
 dotnet user-secrets set "Authentication:ClientId" "{Auth0 Client ID}"
 dotnet user-secrets set "Authentication:RedirectUriPort" "49152"
@@ -125,6 +132,24 @@ dotnet user-secrets set "Authentication:RoleClaimType" "{Auth0 Client ID}/roles"
 Edit `appsettings.Development.json` and change the `Logging:LogLevel:Default` value to `Debug`.
 There is lot of debug logging in the example code below so you can view responses.
 In a real world application you should not log any sensitive information such as tokens.
+
+
+### AuthorizationCallbackResponse Class
+
+Edit `AuthorizationCallbackResponse.cs` with the following contents:
+
+```csharp
+namespace OpenIdConnectConsoleTest;
+
+public class AuthorizationCallbackResponse
+{
+    public string AuthorizationCode { get; init; } = string.Empty;
+    public string RedirectUrl { get; init; } = string.Empty;
+    public string State { get; init; } = string.Empty;
+}
+```
+
+This class will be used to return all of the data required to validate an authorization callback.
 
 ### Worker.cs Class
 
@@ -136,35 +161,34 @@ using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Microsoft.IdentityModel.Tokens;
 using System.Diagnostics;
 using System.IdentityModel.Tokens.Jwt;
-using System.Net;
-using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Encodings.Web;
+using System.Web;
 ```
 
 Add the following lines above the `ILogger` private property:
 
 ```csharp
-private readonly AuthenticationSettings _authSettings;
-private readonly IHostApplicationLifetime _hostApplicationLifetime;
-private readonly static HttpClient _httpClient = new();
+    private readonly AuthenticationSettings _authSettings;
+    private readonly IHostApplicationLifetime _hostApplicationLifetime;
+    private readonly static HttpClient _httpClient = new();
 ```
 
 Update the constructor:
 
 ```csharp
-public Worker(
-    ILogger<Worker> logger,
-    IHostApplicationLifetime hostApplicationLifetime,
-    IConfiguration configuration)
-{
-    _logger = logger;
-    _hostApplicationLifetime = hostApplicationLifetime;
-    _authSettings = configuration.GetSection("Authentication").Get<AuthenticationSettings>() ?? new AuthenticationSettings();
-}
+    public Worker(
+        ILogger<Worker> logger,
+        IHostApplicationLifetime hostApplicationLifetime,
+        IConfiguration configuration)
+    {
+        _logger = logger;
+        _hostApplicationLifetime = hostApplicationLifetime;
+        _authSettings = configuration.GetSection("Authentication").Get<AuthenticationSettings>() ?? new AuthenticationSettings();
+    }
 ```
 
 `_authSettings` will contain all of the configuration options that we need from the `Authentication` section.
@@ -179,33 +203,33 @@ Once the ExecuteAsync method finishes executing, the console application will en
 Edit `Worker.cs` and change `ExecuteAsync` to the following:
 
 ```csharp
-protected override async Task ExecuteAsync(CancellationToken stoppingToken)
-{
-    try
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        ClaimsPrincipal user = await AuthenticateExternalUserAsync(stoppingToken);
-        var userId = user.Claims?.FirstOrDefault(c => c.Type == "sub")?.Value;
-        var email = user.Claims?.FirstOrDefault(c => c.Type == "email")?.Value;
+        try
+        {
+            ClaimsPrincipal user = await AuthenticateExternalUserAsync(stoppingToken);
+            var userId = user.Claims?.FirstOrDefault(c => c.Type == "sub")?.Value;
+            var email = user.Claims?.FirstOrDefault(c => c.Type == "email")?.Value;
 
-        _logger.LogInformation("Authenticated as Id: {userId} Name: {name} Email: {email} Claims: {claims}",
-            userId,
-            user.Identity?.Name,
-            email,
-            user.Claims);
+            _logger.LogInformation("Authenticated as Id: {userId} Name: {name} Email: {email} Claims: {claims}",
+                userId,
+                user.Identity?.Name,
+                email,
+                user.Claims);
 
-        _logger.LogInformation("Is in role Admin: {response}", user.IsInRole("Admin"));
-        _logger.LogInformation("Is in role Guest: {response}", user.IsInRole("Guest"));
+            _logger.LogInformation("Is in role Admin: {response}", user.IsInRole("Admin"));
+            _logger.LogInformation("Is in role Guest: {response}", user.IsInRole("Guest"));
 
-        // Perform other actions here
+            // Perform other actions here
 
-        _hostApplicationLifetime.StopApplication();
+            _hostApplicationLifetime.StopApplication();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError("Error: {message}", ex.Message);
+            Environment.Exit(1);
+        }
     }
-    catch (Exception ex)
-    {
-        _logger.LogError("Error: {message}", ex.Message);
-        Environment.Exit(1);
-    }
-}
 ```
 
 This will represent the main functionality of the console application.
@@ -217,18 +241,16 @@ If any exceptions are raised then the application is terminated with a non-zero 
 ### AuthenticateExternalUserAsync Function
 
 ```csharp
-private async Task<ClaimsPrincipal> AuthenticateExternalUserAsync(CancellationToken stoppingToken)
-{
-    _logger.LogInformation("Authenticating with {authority}...", _authSettings.Authority);
-
-    OpenIdConnectConfiguration openIdConfiguration = await RetrieveOpenIdConnectConfigurationAsync(stoppingToken);
-    string codeVerifier = Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(32));
-    int redirectUriPort = GetRedirectUriPort();
-    string authorizationCode = await RequestAuthorizationCodeAsync(redirectUriPort, codeVerifier, openIdConfiguration, stoppingToken);
-    OpenIdConnectMessage tokenResponse = await RequestTokenAsync(redirectUriPort, authorizationCode, codeVerifier, openIdConfiguration, stoppingToken);
-    ClaimsPrincipal claimsPrincipal = ValidateToken(tokenResponse.IdToken, _authSettings.ClientId, openIdConfiguration);
-    return claimsPrincipal;
-}
+    private async Task<ClaimsPrincipal> AuthenticateExternalUserAsync(CancellationToken stoppingToken)
+    {
+        _logger.LogInformation("Authenticating with {authority}...", _authSettings.Authority);
+        OpenIdConnectConfiguration openIdConfiguration = await RetrieveOpenIdConnectConfigurationAsync(stoppingToken);
+        string codeVerifier = Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(32));
+        AuthorizationCallbackResponse response = await RequestAuthorizationCodeAsync(codeVerifier, openIdConfiguration, stoppingToken);
+        OpenIdConnectMessage tokenResponse = await RequestTokenAsync(response.RedirectUrl, response.AuthorizationCode, codeVerifier, openIdConfiguration, stoppingToken);
+        ClaimsPrincipal claimsPrincipal = ValidateToken(tokenResponse.IdToken, _authSettings.ClientId, openIdConfiguration);
+        return claimsPrincipal;
+    }
 ```
 
 The AuthenticateExternalUserAsync function follows the OpenID Connect authentication workflow.
@@ -261,181 +283,109 @@ We just need to send an HTTP GET request to the configuration endpoint and then 
 Microsoft has already provided classes that maintain and cache this configuration data for us.  The `OpenIdConnectConfigurationRetriever` and `OpenIdConnectConfiguration` classes retrieve and store the OpenID Connect configuration data for us.  We can then just use the `AuthorizationEndpoint`, `TokenEndpoint` and `SigningKeys` properties of the retrieved `OpenIdConnectConfiguration` object when we need those values.  This makes `RetrieveOpenIdConnectConfigurationAsync` really trivial:
 
 ```csharp
-private async Task<OpenIdConnectConfiguration> RetrieveOpenIdConnectConfigurationAsync(CancellationToken cancellationToken)
-{
-    var uri = _authSettings.Authority.TrimEnd('/') + "/.well-known/openid-configuration";
-    _logger.LogInformation("Retrieving configuration from {endpoint}...", uri);
-    var configurationManager = new ConfigurationManager<OpenIdConnectConfiguration>(
-        uri,
-        new OpenIdConnectConfigurationRetriever(),
-        new HttpDocumentRetriever());
-    return await configurationManager.GetConfigurationAsync(cancellationToken);
-}
-```
-
-### GetRedirectUriPort Function
-
-```csharp
-private int GetRedirectUriPort()
-{
-    // Use a specific port if configured since Auth0 does not support randomly assigned ports
-    if (_authSettings.RedirectUriPort != 0)
+    private async Task<OpenIdConnectConfiguration> RetrieveOpenIdConnectConfigurationAsync(CancellationToken cancellationToken)
     {
-        return _authSettings.RedirectUriPort;
+        var uri = _authSettings.Authority.TrimEnd('/') + "/.well-known/openid-configuration";
+        _logger.LogInformation("Retrieving configuration from {endpoint}...", uri);
+        var configurationManager = new ConfigurationManager<OpenIdConnectConfiguration>(
+            uri,
+            new OpenIdConnectConfigurationRetriever(),
+            new HttpDocumentRetriever());
+        return await configurationManager.GetConfigurationAsync(cancellationToken);
     }
-    // Retrieve an assigned port from the operating system
-    var listener = new TcpListener(IPAddress.Loopback, 0);
-    listener.Start();
-    var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-    listener.Stop();
-    return port;
-}
 ```
-
-This function is generally used to get a randomly assigned port from the operating system that will be used for the Redirect URI listener.
-Here we just attempt to open a TCP Listener with port 0 so that the operating system will assign us a port.
-We then close the listener and then use that port for our HTTP Listener.
-The technique was borrowed from the [Google OAuth for Apps: Sample Console Application for Windows](https://github.com/googlesamples/oauth-apps-for-windows/tree/master/OAuthConsoleApp).
-
-
-[RFC 8252 Section 7.3](https://datatracker.ietf.org/doc/html/rfc8252#section-7.3) states:
-
-    The authorization server MUST allow any port to be specified at the time of the request for loopback IP redirect URIs, to accommodate clients that obtain an available ephemeral port from the operating system at the time of the request.
-
-Unfortunately, [Auth0 does not currently support randomly assigned ports](https://community.auth0.com/t/random-local-ports-on-redirect-uri/28623/9) so you must specify a port in the Authentication settings and it must match the port used when setting up the Auth0 Callback URLs mentioned previously.
-For other authentication servers that support randomly defined ports, leave the `RedirectUriPort` setting as 0.
-
-### GetRedirectUri Function
-
-```csharp
-private string GetRedirectUri(int port)
-{
-    return $"http://{IPAddress.Loopback}:{port}/{_authSettings.RedirectUriPath}";
-}
-```
-
-This function just returns a local redirect url based with the specified port and configured path.
-
-For our configuration with `RedirectUriPort` = 49152 and `RedirectUriPath` = "callback" the resulting Redirect URI would be `http://127.0.0.1:49152/callback`
 
 ### RequestAuthorizationCodeAsync Function
 
-This function has a lot of code but isn't really doing anything complicated.
+This function has a bit more code but isn't really doing anything complicated.
 At a high level it does the following:
 
-- Generates an authorization URL
-- Opens an HTTP Listener on the Redirect URI
-- Opens the authorization URL in the default system browser
-- Waits for the browser to redirect to the Redirect URI
-- Validates the response
-- Returns the authorization token
+- Starts an ICallbackListener instance and gets the Redirect URI.
+- Generates an authorization URL including the Redirect URI.
+- Opens the authorization URL in the default system browser.
+- Waits for the browser to redirect to the Redirect URI via the listener.
+- Validates the response and returns the authorization token.
 
 ```csharp
-private async Task<string> RequestAuthorizationCodeAsync(int redirectUriPort, string codeVerifier, OpenIdConnectConfiguration openIdConfiguration, CancellationToken stoppingToken)
-{
-    _logger.LogInformation("Requesting authorization code from {endpoint}...", openIdConfiguration.AuthorizationEndpoint);
-
-    var authorizationCode = string.Empty;
-    var requestState = Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(16));
-    var codeChallenge = Base64UrlEncoder.Encode(SHA256.HashData(Encoding.ASCII.GetBytes(codeVerifier)));
-
-    _logger.LogInformation("Starting HTTP Listener...");
-    using var listener = new HttpListener();
-    listener.Prefixes.Add($"http://{IPAddress.Loopback}:{redirectUriPort}/");
-    listener.Start();
-
-    var redirectUri = GetRedirectUri(redirectUriPort);
-    var parameters = new Dictionary<string, string>
+    private async Task<AuthorizationCallbackResponse> RequestAuthorizationCodeAsync(string codeVerifier, OpenIdConnectConfiguration openIdConfiguration, CancellationToken stoppingToken)
     {
-        { "response_type", "code" },
-        { "client_id", _authSettings.ClientId },
-        { "redirect_uri", redirectUri },
-        { "scope", "openid email profile" },
-        { "state", requestState },
-        { "code_challenge", codeChallenge },
-        { "code_challenge_method", "S256" },
-    };
+        _logger.LogInformation("Requesting authorization code from {endpoint}...", openIdConfiguration.AuthorizationEndpoint);
 
-    if (!string.IsNullOrEmpty(_authSettings.Audience))
-    {
-        parameters.Add("audience", _authSettings.Audience);
-    }
+        // Generate values used to protect and verify the request
+        var requestState = Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(16));
+        var codeChallenge = Base64UrlEncoder.Encode(SHA256.HashData(Encoding.ASCII.GetBytes(codeVerifier)));
 
-    var url = BuildUrl(openIdConfiguration.AuthorizationEndpoint, parameters);
+        // Start the listener and generate the Redirect URI
+        ICallbackListener listener = CallbackListenerFactory.GetCallbackListener();
+        listener.Listen(_authSettings, out var redirectUri);
 
-    _logger.LogInformation("Opening default browser...", url);
-    _logger.LogDebug("Request URL: {request}", url);
-    if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-    {
-        Process.Start(new ProcessStartInfo
+        // Build the authorization request URL
+        var parameters = new Dictionary<string, string>
         {
-            FileName = url,
-            UseShellExecute = true,
-        });
-    }
-    else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
-    {
-        Process.Start("xdg-open", url);
-    }
-    else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
-    {
-        Process.Start("open", url);
-    }
-    else
-    {
-        throw new NotSupportedException("Cannot open default browser");
-    }
+            { "response_type", "code" },
+            { "client_id", _authSettings.ClientId },
+            { "redirect_uri", redirectUri },
+            { "scope", "openid email profile" },
+            { "state", requestState },
+            { "code_challenge", codeChallenge },
+            { "code_challenge_method", "S256" },
+        };
 
-    _logger.LogInformation("Waiting for response from browser...");
-    var context = await listener.GetContextAsync().WaitAsync(TimeSpan.FromMinutes(5), stoppingToken);
-    var request = context.Request;
-    _logger.LogDebug("Response URL: {url}", request.Url);
-
-    string? error = null;
-    string? errorDescription = null;
-    if (!redirectUri.Equals($"http://{request.Url?.Host}:{request.Url?.Port}{request.Url?.AbsolutePath}"))
-    {
-        error = "Invalid Response";
-        errorDescription = "The response does not match the redirect URI";
-    }
-
-    string responseText;
-    error ??= request.QueryString["error"];
-    if (error != null)
-    {
-        errorDescription ??= request.QueryString["error_description"] ?? "Unknown Error";
-        _logger.LogError("Authorization request failed: \"{error}\": {description}", error, errorDescription);
-        responseText = "Authorization request failed";
-    }
-    else
-    {
-        authorizationCode = request.QueryString["code"] ?? string.Empty;
-        var responseState = request.QueryString["state"];
-
-        if ((requestState != responseState) || string.IsNullOrEmpty(authorizationCode))
+        if (!string.IsNullOrEmpty(_authSettings.Audience))
         {
-            responseText = "Authorization state was not valid";
-            _logger.LogError("{response}", responseText);
+            parameters.Add("audience", _authSettings.Audience);
         }
-        else
+
+        string url = BuildUrl(openIdConfiguration.AuthorizationEndpoint, parameters);
+
+        // Open System Browser and wait for the redirect response URI
+        _logger.LogInformation("Opening default browser...");
+        _logger.LogDebug("Request URL: {request}", url);
+
+        OpenSystemBrowser(url);
+
+        _logger.LogInformation("Waiting for response from browser...");
+        var responseUri = await listener.WaitForResponseAsync(stoppingToken);
+
+        _logger.LogDebug("Response URL: {url}", responseUri);
+
+        string? error = null;
+        string? errorDescription = null;
+
+        // Verify the redirect response URI exactly matches the Redirect URI sent in the authorization request
+        if (!responseUri!.ToString().StartsWith(redirectUri))
         {
-            responseText = "Authorization code received";
-            _logger.LogInformation("{response}", responseText);
+            error = "Invalid Response";
+            errorDescription = $"The response does not match the redirect URI: {redirectUri}";
         }
-    }
 
-    var response = context.Response;
-    using (var writer = new StreamWriter(response.OutputStream))
-    {
-        writer.WriteLine($"<HTML><BODY>{responseText}</BODY></HTML>");
-        writer.Flush();
-    }
+        // Check response for errors
+        var queryString = HttpUtility.ParseQueryString(responseUri?.Query ?? string.Empty);
+        error ??= queryString["error"];
+        if (error != null)
+        {
+            errorDescription ??= queryString["error_description"] ?? "Unknown Error";
+            _logger.LogError("Authorization request failed: {error} - {description}", error, errorDescription);
+            throw new Exception($"Authorization request failed: {error} - {errorDescription}");
+        }
 
-    return !string.IsNullOrEmpty(authorizationCode)
-        ? authorizationCode
-        : throw new Exception(responseText);
-}
+        var callbackResponse = new AuthorizationCallbackResponse
+        {
+            AuthorizationCode = queryString["code"] ?? string.Empty,
+            RedirectUrl = redirectUri,
+            State = queryString["state"] ?? string.Empty
+        };
+
+        // Verify the state matches what was sent in the authorization request
+        if ((requestState != callbackResponse.State) || string.IsNullOrEmpty(callbackResponse.AuthorizationCode))
+        {
+            throw new Exception("Invalid authorization state");
+        }
+        return callbackResponse;
+    }
 ```
+When the system browser is done authenticating and authorizing or request, it will redirect the user to the Redirect URI we provided with the response as query string parameters.
+The redirect response will be handled by the `ICallbackListener` interface implementation obtained by the `CallbackListenerFactory` that will be discussed later but for right now all that we need to know is that they handle listening for and retrieving the redirect response URI from the system browser.
 
 One important thing to point out here is that `code_challenge` and `code_challenge_method` values are included in the authorization request.
 This implements the PKCE workflow covered in the [RFC 7636 Proof Key for Code Exchange by OAuth Public Clients Section 4.1](https://datatracker.ietf.org/doc/html/rfc7636#section-4.1) and is used to prevent malicious interception and tampering of the data.
@@ -444,7 +394,7 @@ The `Code Challenge` is then prepared using the `S256` `Code Challenge Method` b
 
 An example generated URL is provided below:
 
-```
+```http
 https://dev-MyDotnetApplication.us.auth0.com:443/authorize?response_type=code&client_id=OiCPeU0i214x6nJUq4YG4ECUlPOSUAlt&redirect_uri=http%3A%2F%2F127.0.0.1%3A49152%2Fcallback&scope=openid%20email%20profile&state=lZ01ygDKM6JhNC0iwcNLsA&code_challenge=n3KyPPCdoUaY44czXEq_Mb_-k6UqqjscXAV__Z5WjMA&code_challenge_method=S256
 ```
 
@@ -452,7 +402,7 @@ When the response is received, the application must verify that the URL used mat
 
 An example response is provided below:
 
-```
+```http
 http://127.0.0.1:49152/callback?code=kBVS3EnU_F-mjPTsKaHLWcz6muM4sxAuowBaEmHn9239t&state=lZ01ygDKM6JhNC0iwcNLsA
 ```
 
@@ -463,22 +413,55 @@ The value returned in the `code` query string parameter of the URL is then retur
 This is just a quick helper function that takes a base URL and dictionary of string values and generates a URL with properly encoded query string parameters.
 
 ```csharp
-private static string BuildUrl(string baseUrl, Dictionary<string, string> queryParameters)
-{
-    var queryBuilder = new StringBuilder();
-    foreach (var pair in queryParameters)
+    private static string BuildUrl(string baseUrl, Dictionary<string, string> queryParameters)
     {
-        queryBuilder.Append('&');
-        queryBuilder.Append(UrlEncoder.Default.Encode(pair.Key));
-        queryBuilder.Append('=');
-        queryBuilder.Append(UrlEncoder.Default.Encode(pair.Value));
+        var queryBuilder = new StringBuilder();
+        foreach (var pair in queryParameters)
+        {
+            queryBuilder.Append('&');
+            queryBuilder.Append(UrlEncoder.Default.Encode(pair.Key));
+            queryBuilder.Append('=');
+            queryBuilder.Append(UrlEncoder.Default.Encode(pair.Value));
+        }
+        var uri = new UriBuilder(baseUrl)
+        {
+            Query = queryBuilder.ToString().Trim('&')
+        };
+        return uri.ToString();
     }
-    var uri = new UriBuilder(baseUrl)
+```
+
+### OpenSystemBrowser Method
+
+This method just opens the specified URL in the default system browser.
+
+All the actual authentication and authorization steps of this workflow happen in the browser.
+The system browser allows the user to use normal login workflows such as Password Managers and Multi-factor authentication and protects the users actual credentials from being leaked to the requesting application.
+
+```csharp
+    private void OpenSystemBrowser(string url)
     {
-        Query = queryBuilder.ToString().Trim('&')
-    };
-    return uri.ToString();
-}
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = url,
+                UseShellExecute = true,
+            });
+        }
+        else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+        {
+            Process.Start("xdg-open", url);
+        }
+        else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+        {
+            Process.Start("open", url);
+        }
+        else
+        {
+            throw new NotSupportedException("Cannot open default browser");
+        }
+    }
 ```
 
 ### RequestTokenAsync Function
@@ -492,39 +475,43 @@ This allows the authentication server to validate that the token request came fr
 
 An example of the HTTP POST Form URL Encoded contents is provided below:
 
-```
+```http
 grant_type=authorization_code&client_id=OiCPeU0i214x6nJUq4YG4ECUlPOSUAlt&code=kBVS3EnU_F-mjPTsKaHLWcz6muM4sxAuowBaEmHn9239t&redirect_uri=http%3A%2F%2F127.0.0.1%3A49152%2Fcallback&code_verifier=YXlDyKO3oD6Fli-NZSEN4CCHvN5OeBNw0ctAEGFBP1g
 ```
 
 ```csharp
-private async Task<OpenIdConnectMessage> RequestTokenAsync(int redirectUriPort, string authorizationCode, string codeVerifier, OpenIdConnectConfiguration openIdConfiguration, CancellationToken stoppingToken)
-{
-    _logger.LogInformation("Requesting access token from {endpoint}...", openIdConfiguration.TokenEndpoint);
-    var parameters = new Dictionary<string, string>
+    private async Task<OpenIdConnectMessage> RequestTokenAsync(string redirectUri, string authorizationCode, string codeVerifier, OpenIdConnectConfiguration openIdConfiguration, CancellationToken stoppingToken)
     {
-        { "grant_type", "authorization_code" },
-        { "client_id", _authSettings.ClientId },
-        { "code", authorizationCode },
-        { "redirect_uri", GetRedirectUri(redirectUriPort) },
-        { "code_verifier", codeVerifier }
-    };
+        _logger.LogInformation("Requesting access token from {endpoint}...", openIdConfiguration.TokenEndpoint);
+        var parameters = new Dictionary<string, string>
+        {
+            { "grant_type", "authorization_code" },
+            { "client_id", _authSettings.ClientId },
+            { "code", authorizationCode },
+            { "redirect_uri", redirectUri },
+            { "code_verifier", codeVerifier }
+        };
 
-    var request = new HttpRequestMessage(HttpMethod.Post, openIdConfiguration.TokenEndpoint)
-    {
-        Content = new FormUrlEncodedContent(parameters)
-    };
+        if (!string.IsNullOrEmpty(_authSettings.ClientSecret))
+        {
+            parameters.Add("client_secret", _authSettings.ClientSecret);
+        }
 
-    _logger.LogDebug("Request: {request}, Form Parameters: {parameters}", request, parameters);
-    var response = _httpClient.Send(request, stoppingToken);
-    if (!response.IsSuccessStatusCode)
-    {
-        throw new Exception($"Token request failed: {response.ReasonPhrase}");
+        var request = new HttpRequestMessage(HttpMethod.Post, openIdConfiguration.TokenEndpoint)
+        {
+            Content = new FormUrlEncodedContent(parameters)
+        };
+
+        _logger.LogDebug("Request: {request}, Form Parameters: {parameters}", request, parameters);
+        var response = _httpClient.Send(request, stoppingToken);
+        var json = await response.Content.ReadAsStringAsync(stoppingToken);
+        _logger.LogDebug("Response: {json}", json);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new Exception($"Token request failed: {response.ReasonPhrase}");
+        }
+        return new OpenIdConnectMessage(json);
     }
-
-    var json = await response.Content.ReadAsStringAsync(stoppingToken);
-    _logger.LogDebug("Response: {json}", json);
-    return new OpenIdConnectMessage(json);
-}
 ```
 
 If everything checks out, the authentication server will then respond with the tokens which are then deserialized to an `OpenIdConnectMessage`:
@@ -571,32 +558,175 @@ We set the `RoleClaimType` so that the user roles will be taken from the specifi
 If the token is valid, a `ClaimsPrincipal
 
 ```csharp
-private ClaimsPrincipal ValidateToken(string token, string audience, OpenIdConnectConfiguration openIdConfiguration)
-{
-    _logger.LogInformation("Validating token...");
-    JwtSecurityTokenHandler.DefaultInboundClaimTypeMap.Clear();
-    var tokenHandler = new JwtSecurityTokenHandler();
-    tokenHandler.InboundClaimTypeMap.Clear();
-    var validationParameters = new TokenValidationParameters
+    private ClaimsPrincipal ValidateToken(string token, string audience, OpenIdConnectConfiguration openIdConfiguration)
     {
-        ClockSkew = TimeSpan.Zero,
-        IssuerSigningKeys = openIdConfiguration.SigningKeys,
-        NameClaimType = "name",
-        RequireExpirationTime = true,
-        RequireSignedTokens = true,
-        RoleClaimType = _authSettings.RoleClaimType,
-        ValidateAudience = true,
-        ValidateIssuerSigningKey = true,
-        ValidateIssuer = true,
-        ValidateLifetime = true,
-        ValidAudience = audience,
-        ValidIssuer = _authSettings.Authority,
-    };
-    ClaimsPrincipal claimsPrincipal = tokenHandler.ValidateToken(token, validationParameters, out var validatedToken);
-    _logger.LogDebug("Validated token: {token}", validatedToken);
-    return claimsPrincipal;
+        _logger.LogInformation("Validating token...");
+        JwtSecurityTokenHandler.DefaultInboundClaimTypeMap.Clear();
+        var tokenHandler = new JwtSecurityTokenHandler();
+        tokenHandler.InboundClaimTypeMap.Clear();
+        var validationParameters = new TokenValidationParameters
+        {
+            ClockSkew = TimeSpan.Zero,
+            IssuerSigningKeys = openIdConfiguration.SigningKeys,
+            NameClaimType = "name",
+            RequireExpirationTime = true,
+            RequireSignedTokens = true,
+            RoleClaimType = _authSettings.RoleClaimType,
+            ValidateAudience = true,
+            ValidateIssuerSigningKey = true,
+            ValidateIssuer = true,
+            ValidateLifetime = true,
+            ValidAudience = audience,
+            ValidIssuer = _authSettings.Authority,
+        };
+        ClaimsPrincipal claimsPrincipal = tokenHandler.ValidateToken(token, validationParameters, out var validatedToken);
+        _logger.LogDebug("Validated token: {token}", validatedToken);
+        return claimsPrincipal;
+    }
+```
+
+## Retrieving the Authorization Code
+
+The Authorization Code workflow for Native apps ([RFC 8252 Section 7](https://datatracker.ietf.org/doc/html/rfc8252#section-7)) outlines three redirect URI options for retrieving this data:
+
+* [Private-Use URI Scheme Redirection](https://datatracker.ietf.org/doc/html/rfc8252#section-7.1)
+* [Claimed "https" Scheme URI Redirection](https://datatracker.ietf.org/doc/html/rfc8252#section-7.2)
+* [Loopback Interface Redirection](https://datatracker.ietf.org/doc/html/rfc8252#section-7.3)
+
+It doesn't really matter which way you retrieve the redirect response URI as the actual validation and usage of it is the same and was already covered.
+The `ICallbackListener` instances are responsible for retrieving the redirect response URI from the browser so we can retrieve the authorization code.
+For this article we will focus on the last one "Loopback Interface Redirection" for simplicity but the different `ICallbackListener` implementations could be created to support the other redirect URI options.
+
+### ICallbackListener Interface
+
+Edit `ICallbackListener.cs` with the following contents:
+
+```csharp
+namespace OpenIdConnectConsoleTest;
+
+public interface ICallbackListener
+{
+    public void Listen(AuthenticationSettings authSettings, out string redirectUri);
+    public Task<Uri?> WaitForResponseAsync(CancellationToken cancellationToken);
 }
 ```
+
+Since we will need the Redirect URI at other steps in the workflow, the `Listen` method of `ICallbackListener` will provide the required Redirect URI for the specific redirect URI option implementation so we can send it to the Authorization Endpoint.
+The `WaitForResponseAsync` method will return the redirect response URI that will contain the response values from the authorization request.
+
+### CallbackListenerFactory Class
+
+We are only focusing on the "Loopback Interface Redirection" option for this article so the `CallbackListenerFactory` class just returns a new instance of `HttpCallbackListener`.
+In the future we can swap out the implementation for one of the other redirect URI options.
+
+Edit `CallbackListenerFactory.cs` with the following contents:
+
+```csharp
+namespace OpenIdConnectConsoleTest;
+
+public static class CallbackListenerFactory
+{
+    public static ICallbackListener GetCallbackListener()
+    {
+        return new HttpCallbackListener();
+    }
+}
+```
+
+### HttpCallbackListener Class
+
+This class needs to implement the `ICallbackListener` interface and have a private field to hold the `HttpListener` instance that will actually be listening for the redirect URI response.
+
+Edit `HttpCallbackListener.cs` and update the class with the following contents:
+
+```csharp
+using System.Net;
+using System.Net.Sockets;
+
+namespace OpenIdConnectConsoleTest;
+
+public class HttpCallbackListener : ICallbackListener
+{
+    private HttpListener? _listener;
+```
+
+#### Listen Method
+
+```csharp
+    public void Listen(AuthenticationSettings authSettings, out string redirectUri)
+    {
+        int redirectUriPort = GetRedirectUriPort(authSettings.RedirectUriPort);
+
+        _listener = new HttpListener();
+        _listener.Prefixes.Add($"http://127.0.0.1:{redirectUriPort}/");
+        _listener.Start();
+
+        redirectUri = $"http://127.0.0.1:{redirectUriPort}/callback";
+    }
+```
+This function just returns a local redirect url based with the specified port and configured path and starts the `HttpListener` on the specified redirect URI.
+
+For our configuration with `RedirectUriPort` = 49152 and `RedirectUriPath` = "callback" the resulting Redirect URI would be:
+
+```http
+http://127.0.0.1:49152/callback
+```
+
+#### GetRedirectUriPort Function
+
+```csharp
+    private static int GetRedirectUriPort(int defaultRedirectUriPort)
+    {
+        // Use a specific port if configured since Auth0 does not support randomly assigned ports
+        if (defaultRedirectUriPort != 0)
+        {
+            return defaultRedirectUriPort;
+        }
+        // Retrieve an assigned port from the operating system
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        listener.Stop();
+        return port;
+    }
+```
+
+This function is generally used to get a randomly assigned port from the operating system that will be used for the Redirect URI listener.
+Here we just attempt to open a TCP Listener with port 0 so that the operating system will assign us a port.
+We then close the listener and then use that port for our HTTP Listener.
+The technique was borrowed from the [Google OAuth for Apps: Sample Console Application for Windows](https://github.com/googlesamples/oauth-apps-for-windows/tree/master/OAuthConsoleApp).
+
+
+[RFC 8252 Section 7.3](https://datatracker.ietf.org/doc/html/rfc8252#section-7.3) states:
+
+    "The authorization server MUST allow any port to be specified at the time of the request for loopback IP redirect URIs, to accommodate clients that obtain an available ephemeral port from the operating system at the time of the request."
+
+Unfortunately, [Auth0 does not currently support randomly assigned ports](https://community.auth0.com/t/random-local-ports-on-redirect-uri/28623/9) so you must specify a port in the Authentication settings and it must match the port used when setting up the Auth0 Callback URLs mentioned previously.
+For other authentication servers that support randomly defined ports, leave the `RedirectUriPort` setting as 0.
+
+#### WaitForResponseAsync
+
+```csharp
+    public async Task<Uri?> WaitForResponseAsync(CancellationToken cancellationToken)
+    {
+        var context = await _listener!.GetContextAsync().WaitAsync(TimeSpan.FromMinutes(5), cancellationToken);
+        var request = context.Request;
+        using (var writer = new StreamWriter(context.Response.OutputStream))
+        {
+            writer.WriteLine($"<HTML><BODY>Please return to the application.</BODY></HTML>");
+            writer.Flush();
+        }
+        _listener.Stop();
+        return request.Url;
+    }
+```
+
+This function waits for the browser to redirect to the specified redirect URI where the `HttpListener` instance is listening.
+There is a 5 minute timeout here just so we are not waiting indefinitely.
+
+An HTML response is sent back to the browser so the user knows they should return to the application.
+
+Finally the URL of the request is returned as our redirect response URI.
 
 ## Testing out the console application
 
@@ -656,15 +786,40 @@ Perform the following steps register a new application and setup the appropriate
 Execute the following to configure the authentication settings for the Microsoft Identity Platform:
 
 ```shell
+dotnet user-secrets clear
 dotnet user-secrets set "Authentication:Authority" "https://login.microsoftonline.com/{Directory (tenant) ID}/v2.0"
 dotnet user-secrets set "Authentication:ClientId" "{Application (client) ID}"
-dotnet user-secrets set "Authentication:RedirectUriPort" 0
-dotnet user-secrets remove "Authentication:RoleClaimType"
 ```
 
-The `RoleClaimType` configuration is removed because the Microsoft Identity Platform defaults to using the reserved `roles` claim which is the default value.
+The `RoleClaimType` is not included in the configuration because the Microsoft Identity Platform defaults to using the reserved `roles` claim which is the default value.
 
 ![Azure Authorization Prompt]({{ site.baseurl }}/assets/2023/05/openid-connect-dotnet-desktop-application/azure_identity_authorization_prompt.png)
+
+## Google's OAuth 2.0 authentication system
+
+[Google's OAuth 2.0 authentication system](https://developers.google.com/identity/openid-connect/openid-connect) can be used as well but does not allow the addition of custom scopes or roles.
+
+Perform the following steps register a new application:
+
+* Create a new project at <https://console.developers.google.com/>.
+* Configure the OAuth Consent Screen.
+* Create a new OAuth Client ID (<https://console.developers.google.com/apis/credentials> and choose Application Type = "Desktop App"
+* Copy down the `Client ID` and `Client Secret` listed on the confirmation screen.
+
+```shell
+dotnet user-secrets clear
+dotnet user-secrets set "Authentication:Authority" "https://accounts.google.com"
+dotnet user-secrets set "Authentication:ClientId" "{Client ID}"
+dotnet user-secrets set "Authentication:ClientSecret" "{Client Secret}"
+```
+
+An interesting thing to note here is that we are including the `Client Secret` as well.
+Generally, for desktop applications using the Authorization Code workflow, you wouldn't need to include the `Client Secret` because it cannot be properly secured in the desktop application.
+In this instance, Google is not treating it as secret as pointed out in their [documentation for installed applications](https://developers.google.com/identity/protocols/oauth2#installed):
+
+    "The process results in a client ID and, in some cases, a client secret, which you embed in the source code of your application. (In this context, the client secret is obviously not treated as a secret.)"
+
+![Google Authorization Prompt]({{ site.baseurl }}/assets/2023/05/openid-connect-dotnet-desktop-application/google_authorization_prompt.png)
 
 ## Conclusion
 
