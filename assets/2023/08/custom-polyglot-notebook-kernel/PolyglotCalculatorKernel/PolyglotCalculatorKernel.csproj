@@ -4,6 +4,9 @@
     <TargetFramework>net7.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <IncludeBuildOutput>true</IncludeBuildOutput>
+    <IsPackable>true</IsPackable>
+    <PackageDescription>Polyglot Calculator Kernel - Custom Kernel Example</PackageDescription>
   </PropertyGroup>
 
   <ItemGroup>

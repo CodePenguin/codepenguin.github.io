@@ -504,8 +504,60 @@ If the token is one of our variables we then publish a `HoverTextProduced` insta
 ## Nuget Packages
 
 So far we have been manually compiling and including our custom kernel as an assembly using the `#r "./PolyglotCalculatorKernel/bin/Debug/net7.0/PolyglotCalculatorKernel.dll"` magic command.
-For final distribution, custom kernels should be packaged as Nuget Packages and loaded using something like `#r "nuget:ClockExtension,1.0.0"`.
+For final distribution, custom kernels should be packaged as Nuget Packages and loaded using something like `#r "nuget:CodePenguin.DotNet.Interactive.Calculator,*-*"`.
 The [ClockExtension Sample](https://github.com/dotnet/interactive/blob/main/samples/extensions/ClockExtension.ipynb) walks through the steps to build things as a Nuget package.
+
+The essential steps are adding a few extra properties to the CSPROJ to identify the package:
+
+```xml
+  <PropertyGroup>
+    <TargetFramework>net7.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IncludeBuildOutput>true</IncludeBuildOutput>
+    <IsPackable>true</IsPackable>
+    <PackageDescription>Polyglot Calculator Kernel - Custom Kernel Example</PackageDescription>
+  </PropertyGroup>
+```
+
+This indicates that the project is packable, includes the build output in the package and gives a description for the package.
+
+You can now execute the following to build and package the Nuget package:
+
+```terminal
+dotnet build
+dotnet pack /p:PackageVersion=0.0.1-beta
+```
+
+You have to specify a version for the Nuget package.
+Here we are specifying a beta suffix since the Dotnet Interactive assemblies are still in beta.
+This isn't required but the `dotnet pack` command will give you a warning if you don't.
+
+To test out our Nuget package locally, add a CSharp cell with the following contents:
+
+```csharp
+var debugOutputFolder = new System.IO.DirectoryInfo(@"./bin/Debug/net7.0/").FullName;
+var nugetSource = $"nuget:{debugOutputFolder}";
+```
+
+This figures out the Nuget package path for the project since the [#i command](https://github.com/dotnet/interactive/blob/main/docs/magic-commands.md#c-kernel) cannot use relative paths at the moment.
+
+Now add a separate CSharp cell with the following contents:
+
+```csharp
+#i @csharp:nugetSource
+#r "nuget:PolyglotCalculatorKernel,*-*"
+```
+
+Now you can execute these two cells to load the Calculator Kernel from local Nuget packages.
+To distribute the kernel to others, you would need to upload it to <https://nuget.org> and then you can reference it with just the `#r` command:
+
+```csharp
+#r "nuget:PolyglotCalculatorKernel,*-*"
+```
+
+The `*-*` says to load the largest suffixed version it can find.
+If you execute the above it will find the version I uploaded to Nuget for this article.
 
 ## Conclusion
 
