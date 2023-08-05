@@ -1,0 +1,39 @@
+#!meta
+
+{"kernelInfo":{"defaultKernelName":"csharp","items":[{"aliases":[],"name":"calculator"},{"aliases":[],"name":"csharp"}]}}
+
+#!csharp
+
+#r "./bin/Debug/net7.0/PolyglotCalculatorKernel.dll"
+PolyglotCalculatorKernel.NotebookExtensions.Load(Microsoft.DotNet.Interactive.KernelInvocationContext.Current.HandlingKernel.RootKernel);
+
+#!calculator
+
+1 + 2 * 3 - 4
+
+#!calculator
+
+#!set --name x --value 5
+x + 1
+
+#!csharp
+
+var csharpInt = 11;
+
+#!calculator
+
+#!set --name csharpInt --value @csharp:csharpInt
+csharpInt + 9
+
+#!calculator
+
+calcInt = 23
+
+#!csharp
+
+#!set --value @calculator:calcInt --name calcInt
+Console.WriteLine(calcInt);
+
+#!calculator
+
+1 + csharpInt
