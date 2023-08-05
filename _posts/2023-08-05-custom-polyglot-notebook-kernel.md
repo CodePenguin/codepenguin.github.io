@@ -1,7 +1,7 @@
 ---
 layout: post
 title: 'Custom Polyglot Notebook Kernel'
-date: 2023-08-05 17:00:00.000000000 -05:00
+date: 2023-08-05 17:00:00.000000000 -04:00
 tags:
 - dotnet
 - programming
@@ -13,6 +13,9 @@ permalink: "/2023/08/05/custom-polyglot-notebook-kernel/"
 Additional language support, extra commands, formatters, etc. can be added using Dotnet Nuget packages.
 
 For this article, we will be creating a custom kernel that will execute basic calculator commands with variable support.
+
+<!--more-->
+<a name="more"></a>
 
 ## Calculator Kernel and Infrastructure
 
